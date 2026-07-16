@@ -37,9 +37,11 @@ If every ticket is done, output <promise>COMPLETE</promise>."
 
 RESULT_FILE=$(mktemp)
 trap 'rm -f "$RESULT_FILE"' EXIT
+STALLED=0
 
 for ((i=1; i<=ITERATIONS; i++)); do
   echo "=== Ralph iteration $i/$ITERATIONS ($(git rev-parse --short HEAD)) ==="
+  HEAD_BEFORE=$(git rev-parse HEAD)
 
   if command -v jq >/dev/null 2>&1; then
     # Live view: assistant text as it arrives, tool calls as [ToolName].
@@ -57,6 +59,21 @@ for ((i=1; i<=ITERATIONS; i++)); do
     echo ""
     echo "All tickets complete after $i iteration(s)."
     exit 0
+  fi
+
+  # Stall detector: an iteration that commits nothing accomplished nothing.
+  # A fresh agent will just retry the same ticket the same way — bail after two.
+  if [ "$(git rev-parse HEAD)" = "$HEAD_BEFORE" ]; then
+    STALLED=$((STALLED + 1))
+    echo "!!! No new commit this iteration (stall $STALLED/2)."
+    if [ "$STALLED" -ge 2 ]; then
+      echo "Two consecutive iterations produced no commits — the loop is stuck."
+      echo "Check $SPEC_DIR/progress.txt and the output above: usually a ticket"
+      echo "that needs splitting, or a command being denied by permissions."
+      exit 1
+    fi
+  else
+    STALLED=0
   fi
 done
 

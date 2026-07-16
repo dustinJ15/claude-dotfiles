@@ -38,6 +38,7 @@ If every ticket is done, output <promise>COMPLETE</promise>."
 RESULT_FILE=$(mktemp)
 trap 'rm -f "$RESULT_FILE"' EXIT
 STALLED=0
+API_FAILS=0
 
 for ((i=1; i<=ITERATIONS; i++)); do
   echo "=== Ralph iteration $i/$ITERATIONS ($(git rev-parse --short HEAD)) ==="
@@ -60,6 +61,20 @@ for ((i=1; i<=ITERATIONS; i++)); do
     echo "All tickets complete after $i iteration(s)."
     exit 0
   fi
+
+  # Transient API failures (529 Overloaded, 5xx) are not stalls — the request
+  # never reached the work. Cool down and retry without burning a strike.
+  if grep -q "API Error" "$RESULT_FILE"; then
+    API_FAILS=$((API_FAILS + 1))
+    if [ "$API_FAILS" -ge 4 ]; then
+      echo "Four consecutive API failures — service is down. Stopping; re-run later."
+      exit 1
+    fi
+    echo "!!! Transient API error ($API_FAILS/4) — cooling down 120s, then retrying."
+    sleep 120
+    continue
+  fi
+  API_FAILS=0
 
   # Stall detector: an iteration that commits nothing accomplished nothing.
   # A fresh agent will just retry the same ticket the same way — bail after two.

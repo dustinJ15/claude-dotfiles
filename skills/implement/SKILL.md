@@ -1,7 +1,6 @@
 ---
 name: implement
 description: Implement a piece of work based on a spec or set of tickets. Use when working one ticket from a specs/<feature>/tickets/ folder, or when the user says "implement this ticket/spec".
-disable-model-invocation: true
 ---
 
 Implement the work described by the user in the spec or tickets.

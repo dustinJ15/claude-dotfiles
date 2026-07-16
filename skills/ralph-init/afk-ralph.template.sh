@@ -2,6 +2,8 @@
 # Ralph loop — bounded AUTONOMOUS iterations. Repeatedly launches a
 # fresh-context, non-interactive Claude; each iteration does ONE ticket,
 # commits, and exits. Stops on the COMPLETE promise or the iteration cap.
+# Streams the agent's text + tool calls live via stream-json + jq; falls
+# back to plain output if jq is missing.
 #
 # Usage:  ./afk-ralph.sh <iterations> specs/<feature-slug>
 #
@@ -22,9 +24,7 @@ fi
 
 touch "$SPEC_DIR/progress.txt"
 
-for ((i=1; i<=ITERATIONS; i++)); do
-  echo "=== Ralph iteration $i/$ITERATIONS ($(git rev-parse --short HEAD)) ==="
-  result=$(claude --permission-mode acceptEdits -p "@$SPEC_DIR/spec.md @$SPEC_DIR/progress.txt \
+PROMPT="@$SPEC_DIR/spec.md @$SPEC_DIR/progress.txt \
 1. Read the spec, every ticket in $SPEC_DIR/tickets/, and the progress file. \
 2. Pick the highest-priority ticket on the frontier (all blockers done, Status: ready-for-agent). \
 3. Implement it test-first. \
@@ -33,11 +33,27 @@ for ((i=1; i<=ITERATIONS; i++)); do
 6. Append one line per action to $SPEC_DIR/progress.txt. \
 7. Commit your changes to the current branch. \
 ONLY WORK ON A SINGLE TICKET. \
-If every ticket is done, output <promise>COMPLETE</promise>.")
+If every ticket is done, output <promise>COMPLETE</promise>."
 
-  echo "$result"
+RESULT_FILE=$(mktemp)
+trap 'rm -f "$RESULT_FILE"' EXIT
 
-  if [[ "$result" == *"<promise>COMPLETE</promise>"* ]]; then
+for ((i=1; i<=ITERATIONS; i++)); do
+  echo "=== Ralph iteration $i/$ITERATIONS ($(git rev-parse --short HEAD)) ==="
+
+  if command -v jq >/dev/null 2>&1; then
+    # Live view: assistant text as it arrives, tool calls as [ToolName].
+    claude --permission-mode acceptEdits -p "$PROMPT" --verbose --output-format stream-json \
+      | tee "$RESULT_FILE" \
+      | jq -rj --unbuffered 'select(.type=="assistant") | .message.content[]?
+          | if .type=="text" then .text + "\n"
+            elif .type=="tool_use" then "  [" + .name + "]\n"
+            else empty end'
+  else
+    claude --permission-mode acceptEdits -p "$PROMPT" | tee "$RESULT_FILE"
+  fi
+
+  if grep -q "<promise>COMPLETE</promise>" "$RESULT_FILE"; then
     echo ""
     echo "All tickets complete after $i iteration(s)."
     exit 0
